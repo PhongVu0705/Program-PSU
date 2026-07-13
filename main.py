@@ -37,6 +37,7 @@ class PSUControllerApp:
     def __init__(self) -> None:
         # ── Core state ─────────────────────────────────────────────────
         self._psu: Optional[PSUController] = None
+        self._connected_port: Optional[str] = None
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._queue: queue.Queue = queue.Queue()
@@ -54,6 +55,11 @@ class PSUControllerApp:
 
         # ── Initial COM port scan ──────────────────────────────────────
         self._on_scan_ports()
+
+        # ── Auto-connect to the ITECH PSU on launch (background) ────────
+        # Run in a daemon thread so the UI window appears immediately and
+        # is not frozen while we probe COM ports (each probe can take ~1 s).
+        threading.Thread(target=self._auto_connect_psu, daemon=True).start()
 
         # ── Start queue polling ────────────────────────────────────────
         self.view.after(100, self._poll_queue)
@@ -142,14 +148,20 @@ class PSUControllerApp:
             messagebox.showwarning("No Steps", "Please add at least one step.")
             return
 
-        # Connect to PSU
+        # Connect to PSU (reuse the auto-connected handle if it matches)
         port = port_raw.split(" - ")[0]
-        self._psu = PSUController(port)
-        try:
-            self._psu.open()
-        except Exception as exc:
-            messagebox.showerror("Connection Error", str(exc))
-            return
+        if self._psu is not None and self._psu.is_open() and self._connected_port == port:
+            pass  # already connected via auto-connect
+        else:
+            if self._psu is not None and self._psu.is_open():
+                self._psu.close()
+            self._psu = PSUController(port)
+            try:
+                self._psu.open()
+            except Exception as exc:
+                messagebox.showerror("Connection Error", str(exc))
+                return
+            self._connected_port = port
 
         # Reset state and launch
         self._stop_event.clear()
@@ -177,6 +189,219 @@ class PSUControllerApp:
             for p in serial.tools.list_ports.comports()
         ]
         self.view.scan_ports(ports)
+
+    # -- Auto-connect on launch ------------------------------------------
+    def _auto_connect_psu(self) -> None:
+        """Background thread: scan only Windows COMx ports for the ITECH
+        IT6005C-80-150 PSU.
+
+        Each port is probed with a hard 1-second serial read timeout —
+        no ``time.sleep`` blocks the scan.  A small CTkToplevel dialog
+        keeps the user informed and closes automatically when the scan
+        ends.  All UI mutations happen via ``view.after(0, …)`` so they
+        run safely on the main thread.
+        """
+        import serial  # pyserial (already a dependency via logic.py)
+        import customtkinter as ctk
+
+        target_idn = "ITECH Electronics,IT6005C-80-150"
+        found_port: Optional[str] = None
+
+        # ── Collect only real COMx ports ──────────────────────────────
+        all_ports = serial.tools.list_ports.comports()
+        com_ports = [p for p in all_ports if p.device.upper().startswith("COM")]
+
+        print(f"\n[AutoConnect] Starting PSU scan — target IDN: '{target_idn}'")
+        print(f"[AutoConnect] Total ports detected : {len(all_ports)}")
+        print(f"[AutoConnect] COM ports to probe   : {len(com_ports)}")
+        if not com_ports:
+            print("[AutoConnect] ⚠  No COM ports found. Is the PSU plugged in?")
+
+        # ── Open scanning dialog on main thread ───────────────────────
+        scan_dialog: list = []   # mutable container so the nested func can access it
+
+        def _open_scan_dialog() -> None:
+            dlg = ctk.CTkToplevel(self.view)
+            dlg.title("Scanning…")
+            dlg.geometry("360x160")
+            dlg.resizable(False, False)
+            dlg.attributes("-topmost", True)
+
+            # Center over the main window
+            self.view.update_idletasks()
+            mx = self.view.winfo_x() + (self.view.winfo_width()  - 360) // 2
+            my = self.view.winfo_y() + (self.view.winfo_height() - 160) // 2
+            dlg.geometry(f"360x160+{mx}+{my}")
+
+            # Prevent accidental close during scan
+            dlg.protocol("WM_DELETE_WINDOW", lambda: None)
+
+            ctk.CTkLabel(
+                dlg,
+                text="🔍  Scanning COM Ports for ITECH PSU…",
+                font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            ).pack(pady=(18, 6))
+
+            port_var = ctk.StringVar(value="Initialising…")
+            ctk.CTkLabel(
+                dlg,
+                textvariable=port_var,
+                font=ctk.CTkFont("Segoe UI", 11),
+                text_color=("gray40", "gray70"),
+            ).pack(pady=2)
+
+            total = max(len(com_ports), 1)
+            prog = ctk.CTkProgressBar(dlg, width=300)
+            prog.set(0)
+            prog.pack(pady=10)
+
+            result_var = ctk.StringVar(value="")
+            ctk.CTkLabel(
+                dlg,
+                textvariable=result_var,
+                font=ctk.CTkFont("Segoe UI", 10, slant="italic"),
+                text_color=("gray50", "gray60"),
+            ).pack()
+
+            scan_dialog.append({
+                "dlg": dlg,
+                "port_var": port_var,
+                "prog": prog,
+                "result_var": result_var,
+                "total": total,
+            })
+
+        self.view.after(0, _open_scan_dialog)
+        # Give Tkinter a moment to actually render the dialog before we start
+        time.sleep(0.05)
+
+        # ── Probe each port ───────────────────────────────────────────
+        for idx, p in enumerate(com_ports):
+            port = p.device
+            desc = p.description
+            print(f"[AutoConnect]   → Probing {port} ({desc}) …", end=" ", flush=True)
+
+            # Update dialog label + progress bar
+            def _update_dialog(i=idx, prt=port, dsc=desc) -> None:
+                if not scan_dialog:
+                    return
+                d = scan_dialog[0]
+                d["port_var"].set(f"Probing {prt}  ({dsc})")
+                d["prog"].set((i + 1) / d["total"])
+
+            self.view.after(0, _update_dialog)
+
+            # Run the entire probe (open + write + read) in a daemon thread.
+            # join(timeout=1.5) enforces a hard wall-clock deadline so that
+            # ports like Bluetooth that hang on serial.Serial() itself are
+            # abandoned after 1.5 s — not just reads.
+            probe_result: list = []   # ["ok", raw_str] | ["err", exc_str] | ["timeout"]
+
+            def _probe(prt=port, result=probe_result) -> None:
+                try:
+                    with serial.Serial(prt, baudrate=9600, timeout=1) as ser:
+                        ser.reset_input_buffer()
+                        ser.write(b"*IDN?\n")
+                        data = ser.read(256).decode("utf-8", errors="ignore").strip()
+                    result.append(("ok", data))
+                except Exception as exc:
+                    result.append(("err", str(exc)))
+
+            probe_thread = threading.Thread(target=_probe, daemon=True)
+            probe_thread.start()
+            probe_thread.join(timeout=1.5)   # ← hard wall-clock limit
+
+            if probe_thread.is_alive():
+                # Thread is still blocked (e.g. Bluetooth open hanging) — skip
+                print("✗ timeout (port did not respond within 1.5 s)")
+                continue
+
+            if not probe_result:
+                print("✗ no result (unknown error)")
+                continue
+
+            status, payload = probe_result[0]
+
+            if status == "err":
+                print(f"✗ error: {payload}")
+                continue
+
+            raw = payload  # status == "ok"
+            if raw:
+                print(f"response: '{raw}'", end=" ")
+            else:
+                print("no response", end=" ")
+
+            if target_idn in raw:
+                print("✔ MATCH!")
+                found_port = port
+                break
+            else:
+                print("✗ no match")
+
+        # ── Close the scanning dialog (always, on main thread) ────────
+        def _close_dialog(fp=found_port) -> None:
+            if not scan_dialog:
+                return
+            d = scan_dialog[0]
+            if fp:
+                d["result_var"].set(f"✔  PSU found on {fp}")
+                d["prog"].set(1.0)
+                d["prog"].configure(progress_color="#2e7d32")
+            else:
+                d["result_var"].set("✗  No ITECH PSU detected")
+                d["prog"].set(1.0)
+                d["prog"].configure(progress_color="#c62828")
+            # Show result briefly, then close
+            d["dlg"].after(900, d["dlg"].destroy)
+
+        self.view.after(0, _close_dialog)
+
+        # ── Result ────────────────────────────────────────────────────
+        if found_port is None:
+            print("[AutoConnect] ✗ PSU not found on any COM port.\n")
+            # Wait a moment so the user can read the dialog result message
+            time.sleep(1.0)
+            self.view.after(
+                0,
+                lambda: __import__("tkinter.messagebox", fromlist=["showerror"]).showerror(
+                    "No PSU Found",
+                    "Please connect to the ITECH PSU IT6005C.",
+                ),
+            )
+            self.view.after(0, lambda: self.view.update_status("Disconnected – ITECH PSU not found"))
+            return
+
+        print(f"[AutoConnect] ✔ PSU found on {found_port}. Opening via PSUController …")
+
+        # Open the matching port through the logic layer and remember it.
+        self._psu = PSUController(found_port)
+        try:
+            self._psu.open()
+            print(f"[AutoConnect] ✔ PSUController opened on {found_port}.\n")
+        except Exception as exc:
+            exc_str = str(exc)
+            print(f"[AutoConnect] ✗ Failed to open {found_port}: {exc_str}\n")
+            self.view.after(
+                0,
+                lambda: __import__("tkinter.messagebox", fromlist=["showerror"]).showerror(
+                    "Connection Error", exc_str
+                ),
+            )
+            self._psu = None
+            return
+
+        self._connected_port = found_port
+
+        # UI updates must happen on the main thread.
+        def _apply_ui() -> None:
+            for item in self.view.port_combo.cget("values"):
+                if item.startswith(found_port):
+                    self.view.port_combo.set(item)
+                    break
+            self.view.update_status(f"Connected – {found_port}")
+
+        self.view.after(0, _apply_ui)
 
     # -- Step management -------------------------------------------------
     def _on_add_step(self) -> None:
