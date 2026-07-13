@@ -28,7 +28,7 @@ try:
 except ImportError:
     messagebox.showerror(
         "Missing Dependency",
-        "Cần cài đặt matplotlib.\nHãy chạy lệnh: pip install matplotlib",
+        "Please install: pip install matplotlib",
     )
     raise SystemExit(1) from None
 
@@ -187,6 +187,15 @@ class PSUView(ctk.CTk):
         self.global_power_entry.configure(state=state)
 
         for row in self._step_rows:
+            if row.get("is_zero_step"):
+                # The safety zero step: Voltage & Delay stay locked, but
+                # the Ramp entry remains editable so the user can set the
+                # safety ramp-down time.  The remove button is always hidden.
+                row["voltage"].configure(state="disabled")
+                row["ramp"].configure(state="normal")
+                row["delay"].configure(state="disabled")
+                row["remove_btn"].configure(state="disabled")
+                continue
             row["voltage"].configure(state=state)
             row["ramp"].configure(state=state)
             row["delay"].configure(state=state)
@@ -549,15 +558,36 @@ class PSUView(ctk.CTk):
     # ==================================================================
     #  Step-row management (pure presentation, no logic)
     # ==================================================================
-    def add_step_row(self) -> dict:
+    def add_step_row(self, is_zero_step: bool = False) -> dict:
         """Create and return a new step-row widget dict.
 
         The returned dict contains:
-            frame, label, voltage (Entry), ramp (Entry), delay (Entry), remove_btn
+            frame, label, voltage (Entry), ramp (Entry), delay (Entry),
+            remove_btn, is_zero_step
+
+        If ``is_zero_step`` is True the row is locked: its entry widgets
+        are read-only and its drag handle / remove button are hidden so
+        the user cannot edit or delete the safety step.  A normal
+        (editable) step is always inserted immediately *before* an
+        existing trailing zero step, keeping the list terminated by it.
         """
         row_frame = ctk.CTkFrame(self._scrollable_frame, fg_color="transparent")
-        row_frame.pack(fill="x", pady=2)
-        step_idx = len(self._step_rows) + 1
+
+        # Insert before the existing trailing zero step (if any) so the
+        # list always ends with the safety step.
+        trailing_zero = (
+            self._step_rows[-1] if (
+                self._step_rows and self._step_rows[-1].get("is_zero_step")
+            ) else None
+        )
+        if trailing_zero is not None and not is_zero_step:
+            row_frame.pack(fill="x", pady=2, before=trailing_zero["frame"])
+            insert_index = len(self._step_rows) - 1
+        else:
+            row_frame.pack(fill="x", pady=2)
+            insert_index = len(self._step_rows)
+
+        step_idx = insert_index + 1
 
         # Drag handle
         drag_handle = ctk.CTkLabel(
@@ -600,6 +630,7 @@ class PSUView(ctk.CTk):
             "voltage": v_entry,
             "ramp": r_entry,
             "delay": d_entry,
+            "is_zero_step": is_zero_step,
         }
 
         rem_btn = ctk.CTkButton(
@@ -611,33 +642,75 @@ class PSUView(ctk.CTk):
         rem_btn.pack(side="left", padx=5)
         row_data["remove_btn"] = rem_btn
 
-        # Bind row drag events
-        drag_handle.bind(
-            "<Button-1>",
-            lambda e, rd=row_data: self._on_drag_start_row(e, rd),
-        )
-        drag_handle.bind(
-            "<B1-Motion>",
-            lambda e, rd=row_data: self._on_drag_motion_row(e, rd),
-        )
-        drag_handle.bind(
-            "<ButtonRelease-1>",
-            lambda e, rd=row_data: self._on_drag_stop_row(e, rd),
-        )
+        # Bind row drag events (the locked zero step is not draggable)
+        if not is_zero_step:
+            drag_handle.bind(
+                "<Button-1>",
+                lambda e, rd=row_data: self._on_drag_start_row(e, rd),
+            )
+            drag_handle.bind(
+                "<B1-Motion>",
+                lambda e, rd=row_data: self._on_drag_motion_row(e, rd),
+            )
+            drag_handle.bind(
+                "<ButtonRelease-1>",
+                lambda e, rd=row_data: self._on_drag_stop_row(e, rd),
+            )
 
-        self._step_rows.append(row_data)
+        # Lock the safety zero step: Voltage & Delay stay read-only (0.0)
+        # with a grayed-out look so the user can see they are not
+        # editable, but the Ramp entry remains editable (normal white)
+        # so the user can set the safety ramp-down time.  A lock icon
+        # replaces the drag handle and the remove button is hidden.
+        if is_zero_step:
+            for entry in (v_entry, d_entry):
+                entry.configure(
+                    state="disabled",
+                    fg_color="#e0e0e0",
+                    text_color="#9e9e9e",
+                    border_color="#cccccc",
+                )
+            drag_handle.configure(text="🔒", cursor="arrow", text_color="#2e7d32")
+            rem_btn.pack_forget()
+
+        # Register and re-number all step labels
+        self._step_rows.insert(insert_index, row_data)
+        self._renumber_steps()
+
         self.update_idletasks()
         self._canvas.yview_moveto(1.0)
         self._on_update_graph()
         return row_data
 
     # ------------------------------------------------------------------
-    def remove_step_row(self, row_data: dict) -> None:
-        """Remove a step row widget and re-number remaining labels."""
-        row_data["frame"].destroy()
-        self._step_rows.remove(row_data)
+    def ensure_zero_step(self) -> None:
+        """Ensure the step list terminates with the locked safety Zero Step.
+
+        If the trailing row is already the zero step this is a no-op;
+        otherwise a new locked zero step is appended.  Call this after
+        any step addition so the safety step is always present.
+        """
+        if self._step_rows and self._step_rows[-1].get("is_zero_step"):
+            return
+        self.add_step_row(is_zero_step=True)
+
+    # ------------------------------------------------------------------
+    def _renumber_steps(self) -> None:
+        """Re-number the step labels to match the current row order."""
         for i, row in enumerate(self._step_rows):
             row["label"].configure(text=f"{i + 1}")
+
+    # ------------------------------------------------------------------
+    def remove_step_row(self, row_data: dict) -> None:
+        """Remove a step row widget and re-number remaining labels.
+
+        The locked safety zero step can never be removed.
+        """
+        if row_data.get("is_zero_step"):
+            return
+        row_data["frame"].destroy()
+        self._step_rows.remove(row_data)
+        self._renumber_steps()
         self._on_update_graph()
 
     # ------------------------------------------------------------------

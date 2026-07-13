@@ -180,12 +180,20 @@ class PSUControllerApp:
 
     # -- Step management -------------------------------------------------
     def _on_add_step(self) -> None:
-        """Add a new step row to the UI."""
+        """Add a new step row, always keeping a trailing safety Zero Step.
+
+        The new editable step is inserted immediately before the locked
+        zero step (or, if the list is empty, the new step is followed by
+        the trailing zero step).  ``ensure_zero_step`` guarantees the
+        safety step is present after every addition.
+        """
         self.view.add_step_row()
+        self.view.ensure_zero_step()
 
     def _on_clear_steps(self) -> None:
-        """Remove all step rows."""
+        """Remove all step rows, then re-establish the trailing safety step."""
         self.view.clear_all_steps()
+        self.view.ensure_zero_step()
 
     def _on_remove_step(self, row_data: dict) -> None:
         """Remove a specific step row."""
@@ -265,7 +273,15 @@ class PSUControllerApp:
         row_data["frame"].configure(fg_color=("#e0e0e0", "#3a3a3a"))
 
     def _on_drag_motion_row(self, event, row_data: dict) -> None:
-        """Handle row re-ordering by dragging."""
+        """Handle row re-ordering by dragging.
+
+        The locked safety zero step is never draggable: it cannot be
+        moved, and no other row may be swapped into or past its trailing
+        position.
+        """
+        if row_data.get("is_zero_step"):
+            return
+
         current_y = event.y_root
         delta_y = current_y - self._drag_start_y
         if abs(delta_y) < 15:
@@ -277,6 +293,9 @@ class PSUControllerApp:
         # Move down
         if delta_y > 0 and idx < len(rows) - 1:
             next_row = rows[idx + 1]
+            # Never swap with / past the trailing zero step
+            if next_row.get("is_zero_step"):
+                return
             threshold = next_row["frame"].winfo_rooty() + (
                 next_row["frame"].winfo_height() / 2
             )
