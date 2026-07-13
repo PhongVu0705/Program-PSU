@@ -183,6 +183,8 @@ class PSUView(ctk.CTk):
         self.refresh_btn.configure(state=state)
         self.add_step_btn.configure(state=state)
         self.clear_btn.configure(state=state)
+        self.global_current_entry.configure(state=state)
+        self.global_power_entry.configure(state=state)
 
         for row in self._step_rows:
             row["voltage"].configure(state=state)
@@ -293,7 +295,7 @@ class PSUView(ctk.CTk):
         self.ax.set_xlim(0, max_x * 1.05 if max_x > 0 else 1)
         self.ax.set_ylim(0, max_y * 1.2 if max_y > 0 else 10)
 
-        self.canvas.draw()
+        self.canvas.draw_idle()
 
     # ------------------------------------------------------------------
     def get_port_raw(self) -> str:
@@ -304,6 +306,11 @@ class PSUView(ctk.CTk):
     def get_global_current(self) -> str:
         """Return the global-current entry text."""
         return self._global_current_var.get().strip()
+
+    # ------------------------------------------------------------------
+    def get_global_power(self) -> str:
+        """Return the global-power entry text."""
+        return self._global_power_var.get().strip()
 
     # ==================================================================
     #  UI Construction (private helpers)
@@ -345,26 +352,40 @@ class PSUView(ctk.CTk):
             state="readonly", width=160,
             font=ctk.CTkFont("Segoe UI", 11),
         )
-        self.port_combo.grid(row=0, column=1, padx=4, pady=8)
+        self.port_combo.grid(row=0, column=1, padx=4, pady=8, sticky="w")
 
         self.refresh_btn = ctk.CTkButton(
             inner, text="⟳", width=34, height=30,
             font=ctk.CTkFont("Segoe UI", 14),
             command=lambda: self._on_scan_ports(),
         )
-        self.refresh_btn.grid(row=0, column=2, padx=4)
+        self.refresh_btn.grid(row=0, column=2, padx=4, pady=8, sticky="w")
 
         ctk.CTkLabel(
-            inner, text="Max (A):",
+            inner, text="Max Curr (A):",
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
             text_color=("#d32f2f", "#ff5252"),
-        ).grid(row=0, column=3, padx=(10, 2), pady=8, sticky="w")
+        ).grid(row=1, column=0, padx=(6, 2), pady=8, sticky="w")
 
         self._global_current_var = StringVar(value="100")
-        ctk.CTkEntry(
+        self.global_current_entry = ctk.CTkEntry(
             inner, textvariable=self._global_current_var, width=70,
             font=ctk.CTkFont("Segoe UI", 11),
-        ).grid(row=0, column=4, padx=6)
+        )
+        self.global_current_entry.grid(row=1, column=1, padx=4, pady=8, sticky="w")
+
+        ctk.CTkLabel(
+            inner, text="Max Power (W):",
+            font=ctk.CTkFont("Segoe UI", 11, "bold"),
+            text_color=("#d32f2f", "#ff5252"),
+        ).grid(row=1, column=2, padx=(10, 2), pady=8, sticky="w")
+
+        self._global_power_var = StringVar(value="1000")
+        self.global_power_entry = ctk.CTkEntry(
+            inner, textvariable=self._global_power_var, width=70,
+            font=ctk.CTkFont("Segoe UI", 11),
+        )
+        self.global_power_entry.grid(row=1, column=3, padx=4, pady=8, sticky="w")
 
     # ------------------------------------------------------------------
     def _build_steps_frame(self, parent) -> None:

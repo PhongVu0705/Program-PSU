@@ -42,6 +42,7 @@ class PSUControllerApp:
         self._queue: queue.Queue = queue.Queue()
         self._last_graph_draw_time = 0.0
         self._graph_needs_draw = False
+        self._debounce_timer = None
 
         # ── Build the view (no callbacks attached yet) ─────────────────
         self.view = PSUView()
@@ -110,6 +111,16 @@ class PSUControllerApp:
             )
             return
 
+        try:
+            global_power = float(self.view.get_global_power())
+            if global_power < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning(
+                "Invalid Input", "Max Power limit must be non-negative.",
+            )
+            return
+
         # Build step list from UI entries
         steps: list[tuple[float, float, float]] = []
         for i, row in enumerate(self.view.step_rows, start=1):
@@ -148,7 +159,7 @@ class PSUControllerApp:
 
         self._worker_thread = threading.Thread(
             target=self._execution_worker,
-            args=(steps, global_current),
+            args=(steps, global_current, global_power),
             daemon=True,
         )
         self._worker_thread.start()
@@ -242,8 +253,10 @@ class PSUControllerApp:
 
     # -- Graph redraw ----------------------------------------------------
     def _on_update_graph(self, event=None) -> None:
-        """Callback wrapper for ``PSUView.draw_graph()``."""
-        self.view.draw_graph()
+        """Callback wrapper for ``PSUView.draw_graph()`` with 150ms debouncing."""
+        if self._debounce_timer:
+            self.view.after_cancel(self._debounce_timer)
+        self._debounce_timer = self.view.after(150, self.view.draw_graph)
 
     # -- Step row drag-reorder -------------------------------------------
     def _on_drag_start_row(self, event, row_data: dict) -> None:
@@ -295,6 +308,7 @@ class PSUControllerApp:
         self,
         steps: list[tuple[float, float, float]],
         max_current: float,
+        max_power: float,
     ) -> None:
         """Run the profile in a background thread via ``ProfileEngine``."""
         if self._psu is None:
@@ -307,11 +321,10 @@ class PSUControllerApp:
                 (msg_type, value)
             ),
         )
-        engine.run_profile(steps, max_current)
+        engine.run_profile(steps, max_current, max_power)
 
     def _poll_queue(self) -> None:
         """Periodically process messages from the worker thread (runs on the main thread)."""
-        graph_dirty = False
         try:
             while True:
                 msg_type, value = self._queue.get_nowait()
@@ -321,12 +334,12 @@ class PSUControllerApp:
                     self.view.update_timer(value)
                 elif msg_type == "progress":
                     self.view.current_elapsed = value
-                    graph_dirty = True
+                    self._graph_needs_draw = True
                 elif msg_type == "done":
                     self.view.set_running_state(False)
                     self.view.update_timer("-- : --")
                     self.view.current_elapsed = None
-                    graph_dirty = True
+                    self._graph_needs_draw = True
                     current_status = self.view._status_var.get()
                     if current_status in ("Stopping...", "Stopped by user"):
                         self.view.update_status("Stopped")
@@ -335,8 +348,13 @@ class PSUControllerApp:
         except queue.Empty:
             pass
         finally:
-            if graph_dirty:
-                self.view.draw_graph()
+            if self._graph_needs_draw:
+                now = time.time()
+                # Draw immediately if done/reset (current_elapsed is None) or if 250ms has elapsed since last draw
+                if self.view.current_elapsed is None or (now - self._last_graph_draw_time) >= 0.25:
+                    self.view.draw_graph()
+                    self._last_graph_draw_time = now
+                    self._graph_needs_draw = False
             self.view.after(100, self._poll_queue)
 
     # ==================================================================

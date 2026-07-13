@@ -98,6 +98,7 @@ class PSUController:
         """
         with self._lock:
             if self._ser is not None and self._ser.is_open:
+                print(f"[PSU Command] Sending: {cmd}")
                 self._ser.write(f"{cmd}\n".encode("utf-8"))
             else:
                 raise RuntimeError("Serial port is not open")
@@ -132,7 +133,7 @@ class ProfileEngine:
         self._progress = progress_callback
 
     # ------------------------------------------------------------------
-    def run_profile(self, steps: list[tuple[float, float, float]], max_current: float) -> None:
+    def run_profile(self, steps: list[tuple[float, float, float]], max_current: float, max_power: float) -> None:
         """Execute a multi-step voltage profile.
 
         Parameters
@@ -141,6 +142,8 @@ class ProfileEngine:
             Each tuple is one step.
         max_current : float
             Global current limit in Amperes.
+        max_power : float
+            Global power limit in Watts.
         """
         psu = self._psu
         if not psu.is_open():
@@ -149,7 +152,7 @@ class ProfileEngine:
             return
 
         try:
-            self._initialise_psu(psu, max_current)
+            self._initialise_psu(psu, max_current, max_power)
 
             total_elapsed = 0.0
             self._progress("progress", 0.0)
@@ -196,13 +199,15 @@ class ProfileEngine:
             self._safe_shutdown(psu, self._progress)
 
     # ------------------------------------------------------------------
-    def _initialise_psu(self, psu: PSUController, max_current: float) -> None:
+    def _initialise_psu(self, psu: PSUController, max_current: float, max_power: float) -> None:
         """Send initialisation commands to the PSU."""
         psu.write_cmd("SYST:REM")
         psu.write_cmd("FUNC VOLT")
         psu.write_cmd(f"CURR:LIM:POS {max_current}")
         psu.write_cmd(f"CURR:LIM:NEG -{max_current}")
-        self._progress("status", f"Initialised – Limit: {max_current} A …")
+        psu.write_cmd(f"POW:LIM {max_power}")
+        psu.write_cmd(f"POW:LIM:NEG -{max_power}")
+        self._progress("status", f"Initialised – Limit: {max_current} A, {max_power} W …")
         time.sleep(0.5)
 
     # ------------------------------------------------------------------
