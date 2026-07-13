@@ -90,7 +90,7 @@ class PSUView(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("ITECH PSU Voltage Controller")
-        self.geometry("1200x700")
+        self.geometry("1280x800")
         self.minsize(1050, 620)
 
         # ── State ──────────────────────────────────────────────────────
