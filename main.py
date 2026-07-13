@@ -16,6 +16,7 @@ Architectural Rules:
 
 import threading
 import queue
+import time
 from typing import Optional
 
 import serial.tools.list_ports
@@ -39,6 +40,8 @@ class PSUControllerApp:
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._queue: queue.Queue = queue.Queue()
+        self._last_graph_draw_time = 0.0
+        self._graph_needs_draw = False
 
         # ── Build the view (no callbacks attached yet) ─────────────────
         self.view = PSUView()
@@ -46,11 +49,20 @@ class PSUControllerApp:
         # ── Wire all callbacks ─────────────────────────────────────────
         self._wire_callbacks()
 
+        self.view.protocol("WM_DELETE_WINDOW", self._on_app_close)
+
         # ── Initial COM port scan ──────────────────────────────────────
         self._on_scan_ports()
 
         # ── Start queue polling ────────────────────────────────────────
         self.view.after(100, self._poll_queue)
+    
+    def _on_app_close(self) -> None:
+        """Đảm bảo dừng thread và ngắt cổng COM an toàn trước khi tắt GUI."""
+        self._stop_event.set()  # Ra lệnh dừng cho ProfileEngine
+        if self._psu and self._psu.is_open():
+            self._psu.close()   # Nhả cổng COM Port ra
+        self.view.destroy()     # Tắt hoàn toàn UI
 
     # ==================================================================
     #  Callback wiring

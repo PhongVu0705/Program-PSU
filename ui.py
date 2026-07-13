@@ -350,7 +350,7 @@ class PSUView(ctk.CTk):
         self.refresh_btn = ctk.CTkButton(
             inner, text="⟳", width=34, height=30,
             font=ctk.CTkFont("Segoe UI", 14),
-            command=self._on_scan_ports,
+            command=lambda: self._on_scan_ports(),
         )
         self.refresh_btn.grid(row=0, column=2, padx=4)
 
@@ -377,7 +377,7 @@ class PSUView(ctk.CTk):
         self.add_step_btn = ctk.CTkButton(
             top_row, text="➕  Add Step", width=120,
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
-            command=self._on_add_step,
+            command=lambda: self._on_add_step(),
         )
         self.add_step_btn.pack(side="left", padx=(4, 6))
 
@@ -386,7 +386,7 @@ class PSUView(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 11, "bold"),
             fg_color=("#c62828", "#d32f2f"),
             hover_color=("#b71c1c", "#b71c1c"),
-            command=self._on_clear_steps,
+            command=lambda: self._on_clear_steps(),
         )
         self.clear_btn.pack(side="left")
 
@@ -463,7 +463,7 @@ class PSUView(ctk.CTk):
             font=ctk.CTkFont("Segoe UI", 12, "bold"),
             fg_color=("#2e7d32", "#388e3c"),
             hover_color=("#1b5e20", "#2e7d32"),
-            command=self._on_start,
+            command=lambda: self._on_start(),
         )
         self.start_btn.pack(side="left", padx=(0, 10))
 
@@ -473,7 +473,7 @@ class PSUView(ctk.CTk):
             fg_color=("#c62828", "#d32f2f"),
             hover_color=("#b71c1c", "#b71c1c"),
             state="disabled",
-            command=self._on_stop,
+            command=lambda: self._on_stop(),
         )
         self.stop_btn.pack(side="left")
 
@@ -521,9 +521,9 @@ class PSUView(ctk.CTk):
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
 
         # Bind graph mouse events to controller-provided callbacks
-        self.canvas.mpl_connect("button_press_event", self._on_graph_press)
-        self.canvas.mpl_connect("motion_notify_event", self._on_graph_drag)
-        self.canvas.mpl_connect("button_release_event", self._on_graph_release)
+        self.canvas.mpl_connect("button_press_event", lambda e: self._on_graph_press(e))
+        self.canvas.mpl_connect("motion_notify_event", lambda e: self._on_graph_drag(e))
+        self.canvas.mpl_connect("button_release_event", lambda e: self._on_graph_release(e))
 
     # ==================================================================
     #  Step-row management (pure presentation, no logic)
@@ -561,17 +561,17 @@ class PSUView(ctk.CTk):
         v_entry = ctk.CTkEntry(row_frame, width=self.col_cfg[1][1], **entry_kw)
         v_entry.insert(0, "0.0")
         v_entry.pack(side="left", padx=self.col_cfg[1][2])
-        v_entry.bind("<KeyRelease>", self._on_update_graph)
+        v_entry.bind("<KeyRelease>", lambda e: self._on_update_graph(e))
 
         r_entry = ctk.CTkEntry(row_frame, width=self.col_cfg[2][1], **entry_kw)
         r_entry.insert(0, "0.0")
         r_entry.pack(side="left", padx=self.col_cfg[2][2])
-        r_entry.bind("<KeyRelease>", self._on_update_graph)
+        r_entry.bind("<KeyRelease>", lambda e: self._on_update_graph(e))
 
         d_entry = ctk.CTkEntry(row_frame, width=self.col_cfg[3][1], **entry_kw)
         d_entry.insert(0, "0.0")
         d_entry.pack(side="left", padx=self.col_cfg[3][2])
-        d_entry.bind("<KeyRelease>", self._on_update_graph)
+        d_entry.bind("<KeyRelease>", lambda e: self._on_update_graph(e))
 
         row_data = {
             "frame": row_frame,
