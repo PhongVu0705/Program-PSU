@@ -75,7 +75,7 @@ class PSUView(ctk.CTk):
     Public attributes (widget references for the controller):
         - port_combo, port_var
         - global_current_var
-        - refresh_btn, add_step_btn, clear_btn, start_btn, stop_btn
+        - refresh_btn, add_step_btn, clear_btn, start_btn, stop_btn, reset_btn
         - status_var, timer_var
         - step_rows (list of dicts with keys: frame, label, voltage, ramp,
           delay, remove_btn)
@@ -106,6 +106,7 @@ class PSUView(ctk.CTk):
         # ── Callbacks (set by controller via ``set_callbacks``) ────────
         self._on_start: callable = lambda: None
         self._on_stop: callable = lambda: None
+        self._on_reset: callable = lambda: None
         self._on_scan_ports: callable = lambda: None
         self._on_add_step: callable = lambda: None
         self._on_clear_steps: callable = lambda: None
@@ -129,6 +130,7 @@ class PSUView(ctk.CTk):
         self,
         on_start: callable,
         on_stop: callable,
+        on_reset: callable,
         on_scan_ports: callable,
         on_add_step: callable,
         on_clear_steps: callable,
@@ -145,6 +147,7 @@ class PSUView(ctk.CTk):
         """Attach all controller callbacks after construction."""
         self._on_start = on_start
         self._on_stop = on_stop
+        self._on_reset = on_reset
         self._on_scan_ports = on_scan_ports
         self._on_add_step = on_add_step
         self._on_clear_steps = on_clear_steps
@@ -180,6 +183,7 @@ class PSUView(ctk.CTk):
         state = "disabled" if running else "normal"
         self.start_btn.configure(state=state)
         self.stop_btn.configure(state="normal" if running else "disabled")
+        self.reset_btn.configure(state="normal")
         self.refresh_btn.configure(state=state)
         self.add_step_btn.configure(state=state)
         self.clear_btn.configure(state=state)
@@ -506,6 +510,16 @@ class PSUView(ctk.CTk):
             command=lambda: self._on_stop(),
         )
         self.stop_btn.pack(side="left")
+
+        self.reset_btn = ctk.CTkButton(
+            frame, text="Reset", width=155, height=38,
+            font=ctk.CTkFont("Segoe UI", 12, "bold"),
+            fg_color=("#ed6c02", "#ff9800"),
+            hover_color=("#c75b00", "#e68900"),
+            state="normal",
+            command=lambda: self._on_reset(),
+        )
+        self.reset_btn.pack(side="left", padx=(10, 0))
 
     # ------------------------------------------------------------------
     def _build_status_frame(self, parent) -> None:

@@ -73,6 +73,7 @@ class PSUControllerApp:
         self.view.set_callbacks(
             on_start=self._on_start,
             on_stop=self._on_stop,
+            on_reset=self._on_reset,
             on_scan_ports=self._on_scan_ports,
             on_add_step=self._on_add_step,
             on_clear_steps=self._on_clear_steps,
@@ -168,6 +169,24 @@ class PSUControllerApp:
         """Signal the worker thread to stop."""
         self._stop_event.set()
         self._queue.put(("status", "Stopping..."))
+
+    def _on_reset(self) -> None:
+        """Stop the current operation and send *RST / *CLS to the PSU.
+
+        The stop event halts the running profile worker, while the
+        thread-safe serial wrapper sends the SCPI reset/clear commands.
+        """
+        # Stop the current operation
+        self._stop_event.set()
+        self._queue.put(("status", "Resetting..."))
+
+        # Send *RST (reset) and *CLS (clear status registers)
+        if self._psu is not None and self._psu.is_open():
+            try:
+                self._psu.write_cmd("*RST")
+                self._psu.write_cmd("*CLS")
+            except Exception as exc:
+                self._queue.put(("status", f"Reset Error: {exc}"))
 
     # -- COM port scanning -----------------------------------------------
     def _on_scan_ports(self) -> None:
